@@ -8,34 +8,28 @@ import java.sql.Statement;
 
 public class DatabaseConnection {
 
-    private static final String URL =
-            "jdbc:sqlite:event_registration.db";
+    private static final String URL = "jdbc:sqlite:event_registration.db";
 
-    public static Connection getConnection() throws SQLException {
-        return DriverManager.getConnection(URL);
+    private DatabaseConnection() {
+        // Prevent creating an instance of this utility class.
     }
 
-    public static void initializeDatabase() {
-        String sql = """
-                CREATE TABLE IF NOT EXISTS users (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    username TEXT NOT NULL UNIQUE,
-                    password TEXT NOT NULL,
-                    roles TEXT NOT NULL
-                        CHECK (roles IN ('TEACHER', 'STUDENT')),
-                    status TEXT NOT NULL DEFAULT 'PENDING'
-                )
-                """;
+    public static Connection getConnection() throws SQLException {
+        Connection connection = DriverManager.getConnection(URL);
 
-        try (Connection connection = getConnection();
-             Statement statement = connection.createStatement()) {
+        try (Statement statement = connection.createStatement()) {
+            statement.execute("PRAGMA foreign_keys = ON;");
 
-            statement.execute(sql);
-            System.out.println("Database connected successfully.");
+            return connection;
 
         } catch (SQLException e) {
-            System.out.println(
-                    "Database initialization failed: " + e.getMessage());
+            try {
+                connection.close();
+            } catch (SQLException closeException) {
+                e.addSuppressed(closeException);
+            }
+
+            throw e;
         }
     }
 }
