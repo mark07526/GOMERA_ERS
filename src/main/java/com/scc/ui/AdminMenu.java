@@ -142,28 +142,37 @@ public class AdminMenu {
 
         displayUsers(users);
 
-        int targetUserId = readIntInput(
-                "Enter User ID to update (0 to cancel): "
-        );
+        User target = null;
+        int targetUserId = 0;
 
-        if (targetUserId == 0) {
-            System.out.println("Update cancelled.");
-            return;
-        }
+        // Loop para paulit-ulit mag-prompt hanggang sa maglagay ng valid ID o mag-cancel (0)
+        while (true) {
+            targetUserId = readIntInput(
+                    "Enter User ID to update (0 to cancel): "
+            );
 
-        if (targetUserId < 0) {
-            System.out.println("User ID must be positive.");
-            return;
-        }
+            if (targetUserId == 0) {
+                System.out.println("Update cancelled.");
+                return;
+            }
 
-        User target = users.stream()
-                .filter(user -> user.id() == targetUserId)
-                .findFirst()
-                .orElse(null);
+            if (targetUserId < 0) {
+                System.out.println("User ID must be positive.");
+                continue;
+            }
 
-        if (target == null) {
-            System.out.println("User ID not found.");
-            return;
+            int finalTargetUserId = targetUserId;
+            target = users.stream()
+                    .filter(user -> user.id() == finalTargetUserId)
+                    .findFirst()
+                    .orElse(null);
+
+            if (target == null) {
+                System.out.println("User ID not found. Please try again.");
+                continue; // Babalik sa pagtatanong ng ID kung wala sa listahan
+            }
+
+            break; // Nahanap na, tutuloy na sa susunod na hakbang
         }
 
         if (currentAdmin == null) {
