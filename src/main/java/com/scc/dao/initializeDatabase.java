@@ -1,3 +1,4 @@
+
 package com.scc.dao;
 
 import java.sql.Connection;
@@ -16,12 +17,12 @@ public class initializeDatabase {
                 roles TEXT NOT NULL
                     CHECK (roles IN (
                         'ADMIN',
-                        'PARTICIPANT',
                         'ORGANIZER',
-                        'STUDENT',
-                        'TEACHER'
+                        'PARTICIPANT'
                     )),
                 status TEXT NOT NULL DEFAULT 'PENDING'
+                    CHECK (status IN ('PENDING', 'APPROVED')),
+                is_active INTEGER NOT NULL DEFAULT 1
             );
             """;
 
@@ -30,8 +31,14 @@ public class initializeDatabase {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 event_name TEXT NOT NULL,
                 description TEXT,
+                category TEXT NOT NULL,
                 event_date TEXT NOT NULL,
-                location TEXT
+                location TEXT NOT NULL,
+                capacity INTEGER NOT NULL CHECK (capacity > 0),
+                created_by INTEGER,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (created_by) REFERENCES users(id)
             );
             """;
 
@@ -41,86 +48,127 @@ public class initializeDatabase {
                 user_id INTEGER NOT NULL,
                 event_id INTEGER NOT NULL,
                 registration_date TEXT DEFAULT CURRENT_TIMESTAMP,
-                status TEXT NOT NULL DEFAULT 'REGISTERED',
+                status TEXT NOT NULL DEFAULT 'REGISTERED'
+                    CHECK (status IN (
+                        'REGISTERED',
+                        'ATTENDED',
+                        'CANCELLED'
+                    )),
                 FOREIGN KEY (user_id) REFERENCES users(id),
                 FOREIGN KEY (event_id) REFERENCES events(id),
                 UNIQUE (user_id, event_id)
             );
             """;
 
-        try (Connection connection = DatabaseConnection.getConnection();
-             Statement statement = connection.createStatement()) {
+        String createActivityLogsTable = """
+            CREATE TABLE IF NOT EXISTS activity_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                action TEXT NOT NULL,
+                details TEXT,
+                activity_date TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
+            """;
 
-            // Create the tables if they do not exist.
-            statement.execute(createUsersTable);
-            statement.execute(createEventsTable);
-            statement.execute(createRegistrationsTable);
+        try (Connection connection = DatabaseConnection.getConnection()) {
 
-            // Check whether the existing users table has an old role restriction.
-            boolean hasOldRoleConstraint = false;
+            // Enable foreign key support
+            try (Statement statement = connection.createStatement()) {
+                statement.execute("PRAGMA foreign_keys = ON");
 
-            try (var result = statement.executeQuery(
-                    "SELECT sql FROM sqlite_master " +
-                            "WHERE type = 'table' AND name = 'users'")) {
+                // Create tables
+                statement.execute(createUsersTable);
+                statement.execute(createEventsTable);
+                statement.execute(createRegistrationsTable);
+                statement.execute(createActivityLogsTable);
 
-                if (result.next()) {
-                    String tableSql = result.getString("sql");
+                // Migration for existing users table
+                addColumnIfMissing(
+                        connection,
+                        "users",
+                        "is_active",
+                        "INTEGER NOT NULL DEFAULT 1"
+                );
 
-                    if (tableSql != null &&
-                            tableSql.contains(
-                                    "CHECK (roles IN ('ORGANIZER', 'PARTICIPANT'))")) {
-                        hasOldRoleConstraint = true;
-                    }
-                }
-            }
+                // Migration for existing events table
+                addColumnIfMissing(
+                        connection,
+                        "events",
+                        "category",
+                        "TEXT NOT NULL DEFAULT 'GENERAL'"
+                );
 
-            if (hasOldRoleConstraint) {
-                statement.execute("PRAGMA foreign_keys = OFF");
+                addColumnIfMissing(
+                        connection,
+                        "events",
+                        "capacity",
+                        "INTEGER NOT NULL DEFAULT 100"
+                );
 
-                try {
-                    connection.setAutoCommit(false);
+                addColumnIfMissing(
+                        connection,
+                        "events",
+                        "created_by",
+                        "INTEGER"
+                );
 
-                    // 1. Create the new users table with all roles
-                    statement.execute("""
-                        CREATE TABLE users_new (
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            username TEXT NOT NULL UNIQUE,
-                            password TEXT NOT NULL,
-                            roles TEXT NOT NULL
-                                CHECK (roles IN (
-                                    'ADMIN',
-                                    'PARTICIPANT',
-                                    'ORGANIZER',
-                                    'STUDENT',
-                                    'TEACHER'
-                                )),
-                            status TEXT NOT NULL DEFAULT 'PENDING'
-                        );
-                        """);
+                addColumnIfMissing(
+                        connection,
+                        "events",
+                        "is_active",
+                        "INTEGER NOT NULL DEFAULT 1"
+                );
 
-                    // 2. Copy data from old table to new table
-                    statement.execute("""
-                        INSERT INTO users_new (id, username, password, roles, status)
-                        SELECT id, username, password, roles, status FROM users;
-                        """);
+                addColumnIfMissing(
+                        connection,
+                        "events",
+                        "created_at",
+                        "TEXT"
+                );
 
-                    // 3. Drop old table and rename new table
-                    statement.execute("DROP TABLE users;");
-                    statement.execute("ALTER TABLE users_new RENAME TO users;");
-
-                    connection.commit();
-                    connection.setAutoCommit(true);
-                } catch (SQLException e) {
-                    connection.rollback();
-                    connection.setAutoCommit(true);
-                    throw e;
-                } finally {
-                    statement.execute("PRAGMA foreign_keys = ON");
-                }
+                System.out.println("Database initialized successfully!");
             }
 
         } catch (SQLException e) {
+            System.out.println("Database initialization failed: "
+                    + e.getMessage());
             e.printStackTrace();
+        }
+    }
+
+    // Check if a column already exists before adding it
+    private static void addColumnIfMissing(
+            Connection connection,
+            String tableName,
+            String columnName,
+            String columnDefinition) throws SQLException {
+
+        boolean exists = false;
+
+        String sql = "PRAGMA table_info(" + tableName + ")";
+
+        try (Statement statement = connection.createStatement();
+             var result = statement.executeQuery(sql)) {
+
+            while (result.next()) {
+                if (columnName.equalsIgnoreCase(
+                        result.getString("name"))) {
+                    exists = true;
+                    break;
+                }
+            }
+        }
+
+        if (!exists) {
+            String alterSql = "ALTER TABLE " + tableName
+                    + " ADD COLUMN " + columnName + " " + columnDefinition;
+
+            try (Statement statement = connection.createStatement()) {
+                statement.executeUpdate(alterSql);
+                System.out.println("Added column: "
+                        + tableName + "." + columnName);
+            }
         }
     }
 }

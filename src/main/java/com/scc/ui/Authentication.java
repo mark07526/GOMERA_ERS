@@ -2,6 +2,7 @@
 package com.scc.ui;
 
 import com.scc.dao.UserDao;
+import com.scc.dao.ActivityLogDao;
 import com.scc.model.User;
 
 import java.util.Locale;
@@ -10,17 +11,16 @@ import java.util.Scanner;
 public class Authentication {
 
     private final UserDao userDao;
+    private final ActivityLogDao activityLogDao;
     private final Scanner scanner;
 
     public Authentication(UserDao userDao, Scanner scanner) {
         this.userDao = userDao;
         this.scanner = scanner;
+        this.activityLogDao = new ActivityLogDao();
     }
 
-    // =========================
     // START SYSTEM
-    // =========================
-
     public void start() {
         boolean running = true;
 
@@ -44,23 +44,16 @@ public class Authentication {
 
                 case "3":
                     running = false;
-                    System.out.println(
-                            "Thank you for using the system!"
-                    );
+                    System.out.println("Thank you for using the system!");
                     break;
 
                 default:
-                    System.out.println(
-                            "Invalid choice. Please try again."
-                    );
+                    System.out.println("Invalid choice. Please try again.");
             }
         }
     }
 
-    // =========================
     // REGISTER ACCOUNT
-    // =========================
-
     private void registerAccount() {
         System.out.println("\n===== REGISTER ACCOUNT =====");
 
@@ -85,7 +78,7 @@ public class Authentication {
             return;
         }
 
-        if (password.isEmpty()) {
+        if (password.isBlank()) {
             System.out.println("Password is required.");
             return;
         }
@@ -97,14 +90,22 @@ public class Authentication {
             return;
         }
 
-        userDao.register(username, password, role);
+        try {
+            userDao.register(username, password, role);
+            System.out.println(
+                    "Registration request submitted. Your account is PENDING approval."
+            );
+        } catch (RuntimeException e) {
+            System.out.println("Registration failed: " + e.getMessage());
+        }
     }
 
+    // SELECT REGISTRATION ROLE
     private String readRegistrationRole() {
         while (true) {
             System.out.println("\nSelect your role:");
             System.out.println("1. ORGANIZER");
-            System.out.println("2. PARTICIPANTS");
+            System.out.println("2. PARTICIPANT");
             System.out.println("0. Cancel");
             System.out.print("Choose role: ");
 
@@ -115,23 +116,18 @@ public class Authentication {
                     return "ORGANIZER";
 
                 case "2":
-                    return "PARTICIPANTS";
+                    return "PARTICIPANT";
 
                 case "0":
                     return null;
 
                 default:
-                    System.out.println(
-                            "Invalid role choice. Enter 1, 2, or 0."
-                    );
+                    System.out.println("Invalid role choice. Enter 1, 2, or 0.");
             }
         }
     }
 
-    // =========================
     // LOGIN ACCOUNT
-    // =========================
-
     private void loginAccount() {
         System.out.println("\n===== LOGIN =====");
 
@@ -141,71 +137,69 @@ public class Authentication {
         System.out.print("Enter password: ");
         String password = scanner.nextLine();
 
-        User user = userDao.login(username, password);
-
-        if (user == null) {
-            System.out.println(
-                    "Invalid username or password."
-            );
+        if (username.isBlank() || password.isBlank()) {
+            System.out.println("Username and password are required.");
             return;
         }
 
-        // Match the status values used by UserDao.
+        User user = userDao.login(username, password);
+
+        if (user == null) {
+            System.out.println("Invalid username or password.");
+            return;
+        }
+
         if ("PENDING".equalsIgnoreCase(user.status())) {
-            System.out.println(
-                    "Your account is still pending approval."
-            );
-            System.out.println(
-                    "Please contact the administrator."
-            );
+            System.out.println("Your account is still pending approval.");
+            System.out.println("Please contact the administrator.");
             return;
         }
 
         if (!"APPROVED".equalsIgnoreCase(user.status())) {
-            System.out.println(
-                    "Your account is not approved."
-            );
+            System.out.println("Your account is not approved.");
+            return;
+        }
+
+        if (user.roles() == null) {
+            System.out.println("Unknown user role.");
             return;
         }
 
         System.out.println("\nLogin successful!");
         System.out.println("Welcome, " + user.username() + "!");
 
+        activityLogDao.logActivity(
+                user.id(),
+                "LOGIN",
+                "User logged into the system."
+        );
+
         routeByRole(user);
     }
 
-    // =========================
     // ROUTE BY USER ROLE
-    // =========================
-
     private void routeByRole(User user) {
-        if (user.roles() == null) {
-            System.out.println("Unknown user role.");
-            return;
-        }
+        String role = user.roles().toUpperCase(Locale.ROOT);
 
-        switch (user.roles().toUpperCase(Locale.ROOT)) {
+        switch (role) {
             case "ADMIN":
                 adminMenu(user);
                 break;
 
             case "ORGANIZER":
-                OrganizerMenu(user);
+                organizerMenu(user);
                 break;
 
-            case "PARTICIPANTS":
-                ParticipantsMenu(user);
+            case "PARTICIPANT":
+                participantMenu(user);
                 break;
 
             default:
-                System.out.println("Unknown user role.");
+                System.out.println("Unknown user role: " + role);
         }
     }
 
-    // =========================
     // ADMIN MENU
-    // =========================
-
     private void adminMenu(User user) {
         AdminMenu menu = new AdminMenu(
                 userDao,
@@ -214,81 +208,25 @@ public class Authentication {
         );
 
         menu.showMenu();
-
-        System.out.println("Admin logged out.");
     }
 
-    // =========================
-    // TEACHER MENU
-    // =========================
+    // ORGANIZER MENU
+    private void organizerMenu(User user) {
+        OrganizerMenu menu = new OrganizerMenu(
+                user,
+                scanner
+        );
 
-    private void OrganizerMenu(User user) {
-        boolean loggedIn = true;
-
-        while (loggedIn) {
-            System.out.println("\n===== ORGANIZER MENU =====");
-            System.out.println("1. View Account");
-            System.out.println("2. Logout");
-            System.out.print("Choose an option: ");
-
-            String choice = scanner.nextLine().trim();
-
-            switch (choice) {
-                case "1":
-                    displayAccount(user);
-                    break;
-
-                case "2":
-                    loggedIn = false;
-                    System.out.println("Organizer logged out.");
-                    break;
-
-                default:
-                    System.out.println("Invalid choice.");
-            }
-        }
+        menu.showMenu();
     }
 
-    // =========================
-    // STUDENT MENU
-    // =========================
+    // PARTICIPANT MENU
+    private void participantMenu(User user) {
+        ParticipantsMenu menu = new ParticipantsMenu(
+                user,
+                scanner
+        );
 
-    private void ParticipantsMenu(User user) {
-        boolean loggedIn = true;
-
-        while (loggedIn) {
-            System.out.println("\n===== PARTICIPANT MENU =====");
-            System.out.println("1. View Account");
-            System.out.println("2. Logout");
-            System.out.print("Choose an option: ");
-
-            String choice = scanner.nextLine().trim();
-
-            switch (choice) {
-                case "1":
-                    displayAccount(user);
-                    break;
-
-                case "2":
-                    loggedIn = false;
-                    System.out.println("Participants logged out.");
-                    break;
-
-                default:
-                    System.out.println("Invalid choice.");
-            }
-        }
-    }
-
-    // =========================
-    // DISPLAY ACCOUNT
-    // =========================
-
-    private void displayAccount(User user) {
-        System.out.println("\n===== ACCOUNT DETAILS =====");
-        System.out.println("User ID: " + user.id());
-        System.out.println("Username: " + user.username());
-        System.out.println("Role: " + user.roles());
-        System.out.println("Status: " + user.status());
+        menu.showMenu();
     }
 }

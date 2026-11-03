@@ -1,78 +1,59 @@
+
 package com.scc.dao;
 
 import com.scc.model.User;
 
-import javax.crypto.SecretKeyFactory;
-import javax.crypto.spec.PBEKeySpec;
-import java.security.MessageDigest;
-import java.security.SecureRandom;
-import java.security.NoSuchAlgorithmException;
-import java.security.spec.InvalidKeySpecException;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.util.ArrayList;
+import java.security.SecureRandom;
+import java.security.spec.KeySpec;
 import java.util.Base64;
 import java.util.List;
-import java.util.Locale;
+import java.util.ArrayList;
+import javax.crypto.SecretKeyFactory;
+import javax.crypto.spec.PBEKeySpec;
 
 public class UserDao {
 
     private static final int ITERATIONS = 210_000;
     private static final int KEY_LENGTH = 256;
+    private static final int SALT_LENGTH = 16;
+
     private static final SecureRandom RANDOM = new SecureRandom();
 
-    // =========================
+    // ==============================
     // PASSWORD HASHING
-    // =========================
+    // ==============================
 
     private String hashPassword(String password) {
-        byte[] salt = new byte[16];
-        RANDOM.nextBytes(salt);
-
-        byte[] hash = deriveKey(password, salt);
-
-        return Base64.getEncoder().encodeToString(salt)
-                + ":"
-                + Base64.getEncoder().encodeToString(hash);
-    }
-
-    private byte[] deriveKey(String password, byte[] salt) {
-        PBEKeySpec spec = new PBEKeySpec(
-                password.toCharArray(),
-                salt,
-                ITERATIONS,
-                KEY_LENGTH
-        );
-
         try {
-            SecretKeyFactory factory =
-                    SecretKeyFactory.getInstance(
-                            "PBKDF2WithHmacSHA256"
-                    );
+            byte[] salt = new byte[SALT_LENGTH];
+            RANDOM.nextBytes(salt);
 
-            return factory.generateSecret(spec).getEncoded();
-
-        } catch (NoSuchAlgorithmException
-                 | InvalidKeySpecException e) {
-
-            throw new IllegalStateException(
-                    "Password hashing failed.", e
+            KeySpec spec = new PBEKeySpec(
+                    password.toCharArray(),
+                    salt,
+                    ITERATIONS,
+                    KEY_LENGTH
             );
 
-        } finally {
-            spec.clearPassword();
+            SecretKeyFactory factory =
+                    SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256");
+
+            byte[] hash = factory.generateSecret(spec).getEncoded();
+
+            return Base64.getEncoder().encodeToString(salt)
+                    + ":"
+                    + Base64.getEncoder().encodeToString(hash);
+
+        } catch (Exception e) {
+            throw new RuntimeException("Password hashing failed.", e);
         }
     }
 
-    private boolean verifyPassword(
-            String password, String storedPassword) {
-
-        if (storedPassword == null) {
-            return false;
-        }
-
+    private boolean verifyPassword(String password, String storedPassword) {
         try {
             String[] parts = storedPassword.split(":");
 
@@ -80,367 +61,356 @@ public class UserDao {
                 return false;
             }
 
-            byte[] salt =
-                    Base64.getDecoder().decode(parts[0]);
+            byte[] salt = Base64.getDecoder().decode(parts[0]);
+            byte[] expectedHash = Base64.getDecoder().decode(parts[1]);
 
-            byte[] expectedHash =
-                    Base64.getDecoder().decode(parts[1]);
-
-            byte[] actualHash = deriveKey(password, salt);
-
-            return MessageDigest.isEqual(
-                    expectedHash, actualHash
+            KeySpec spec = new PBEKeySpec(
+                    password.toCharArray(),
+                    salt,
+                    ITERATIONS,
+                    KEY_LENGTH
             );
 
-        } catch (IllegalArgumentException e) {
+            SecretKeyFactory factory =
+                    SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256");
+
+            byte[] actualHash = factory.generateSecret(spec).getEncoded();
+
+            if (actualHash.length != expectedHash.length) {
+                return false;
+            }
+
+            int difference = 0;
+
+            for (int i = 0; i < actualHash.length; i++) {
+                difference |= actualHash[i] ^ expectedHash[i];
+            }
+
+            return difference == 0;
+
+        } catch (Exception e) {
             return false;
         }
     }
 
-    // =========================
-    // REGISTER USER
-    // =========================
+    // ==============================
+    // REGISTER ACCOUNT
+    // ==============================
 
-    public boolean register(
-            String username, String password, String role) {
+    public void register(String username, String password, String role) {
 
         if (username == null || username.isBlank()
-                || password == null || password.isEmpty()) {
-
-            System.out.println(
-                    "Username and password are required."
-            );
-            return false;
+                || password == null || password.isBlank()) {
+            System.out.println("Username and password are required.");
+            return;
         }
 
         if (role == null) {
             System.out.println("Invalid role.");
-            return false;
+            return;
         }
 
-        String normalizedRole =
-                role.trim().toUpperCase(Locale.ROOT);
+        role = role.trim().toUpperCase();
 
-        if (!normalizedRole.equals("ORGANIZER")
-                && !normalizedRole.equals("PARTICIPANT")
-                && !normalizedRole.equals("ADMIN")) {
-
+        if (!List.of("ADMIN", "ORGANIZER", "PARTICIPANT").contains(role)) {
             System.out.println("Invalid role.");
-            return false;
+            return;
         }
 
         String sql = """
-                INSERT INTO users (username, password, roles, status)
-                VALUES (?, ?, ?, 'PENDING')
-                """;
+            INSERT INTO users (username, password, roles, status)
+            VALUES (?, ?, ?, 'PENDING')
+            """;
 
-        try (Connection connection =
-                     DatabaseConnection.getConnection();
-             PreparedStatement ps =
-                     connection.prepareStatement(sql)) {
+        try (Connection connection = DatabaseConnection.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
 
-            ps.setString(1, username.trim());
-            ps.setString(2, hashPassword(password));
-            ps.setString(3, normalizedRole);
+            statement.setString(1, username.trim());
+            statement.setString(2, hashPassword(password));
+            statement.setString(3, role);
 
-            ps.executeUpdate();
+            statement.executeUpdate();
 
             System.out.println("Registration successful!");
-            System.out.println("Account status: PENDING");
-
-            return true;
+            System.out.println("Your account is now PENDING approval.");
 
         } catch (SQLException e) {
-
             if (e.getMessage() != null
-                    && e.getMessage().contains(
-                    "UNIQUE constraint failed")) {
-
+                    && e.getMessage().toLowerCase().contains("unique")) {
                 System.out.println("Username already exists.");
-
             } else {
-                System.out.println(
-                        "Registration failed: " + e.getMessage()
-                );
+                System.out.println("Registration failed: " + e.getMessage());
             }
-
-            return false;
         }
     }
 
-    // =========================
-    // LOGIN USER
-    // =========================
+    // ==============================
+    // LOGIN
+    // ==============================
 
     public User login(String username, String password) {
 
-        if (username == null || username.isBlank()
-                || password == null || password.isEmpty()) {
-            return null;
-        }
-
         String sql = """
-                SELECT id, username, password, roles, status
-                FROM users
-                WHERE username = ?
-                """;
+            SELECT id, username, password, roles, status
+            FROM users
+            WHERE username = ?
+              AND COALESCE(is_active, 1) = 1
+            """;
 
-        try (Connection connection =
-                     DatabaseConnection.getConnection();
-             PreparedStatement ps =
-                     connection.prepareStatement(sql)) {
+        try (Connection connection = DatabaseConnection.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
 
-            ps.setString(1, username.trim());
+            statement.setString(1, username.trim());
 
-            try (ResultSet rs = ps.executeQuery()) {
+            try (ResultSet result = statement.executeQuery()) {
 
-                if (rs.next()) {
+                if (result.next()) {
 
-                    String storedPassword =
-                            rs.getString("password");
+                    String storedPassword = result.getString("password");
 
-                    if (verifyPassword(
-                            password, storedPassword)) {
+                    if (verifyPassword(password, storedPassword)) {
 
                         return new User(
-                                rs.getInt("id"),
-                                rs.getString("username"),
+                                result.getInt("id"),
+                                result.getString("username"),
                                 storedPassword,
-                                rs.getString("roles"),
-                                rs.getString("status")
+                                result.getString("roles"),
+                                result.getString("status")
                         );
                     }
                 }
             }
 
         } catch (SQLException e) {
-            System.out.println(
-                    "Login failed: " + e.getMessage()
-            );
+            System.out.println("Login error: " + e.getMessage());
         }
 
         return null;
     }
 
-    // =========================
+    // ==============================
     // GET ALL USERS
-    // =========================
+    // ==============================
 
     public List<User> getAllUsers() {
 
         List<User> users = new ArrayList<>();
 
         String sql = """
-                SELECT id, username, password, roles, status
-                FROM users
-                ORDER BY id
-                """;
+            SELECT id, username, password, roles, status
+            FROM users
+            ORDER BY id
+            """;
 
-        try (Connection connection =
-                     DatabaseConnection.getConnection();
-             PreparedStatement ps =
-                     connection.prepareStatement(sql);
-             ResultSet rs = ps.executeQuery()) {
+        try (Connection connection = DatabaseConnection.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql);
+             ResultSet result = statement.executeQuery()) {
 
-            while (rs.next()) {
-
-                User user = new User(
-                        rs.getInt("id"),
-                        rs.getString("username"),
-                        rs.getString("password"),
-                        rs.getString("roles"),
-                        rs.getString("status")
-                );
-
-                users.add(user);
+            while (result.next()) {
+                users.add(new User(
+                        result.getInt("id"),
+                        result.getString("username"),
+                        result.getString("password"),
+                        result.getString("roles"),
+                        result.getString("status")
+                ));
             }
 
         } catch (SQLException e) {
-            System.out.println(
-                    "Unable to retrieve users: " + e.getMessage()
-            );
+            System.out.println("Error retrieving users: " + e.getMessage());
         }
 
         return users;
     }
 
-    // =========================
+    // ==============================
     // GET PENDING USERS
-    // =========================
+    // ==============================
 
     public List<User> getPendingUsers() {
 
         List<User> users = new ArrayList<>();
 
         String sql = """
-                SELECT id, username, password, roles, status
-                FROM users
-                WHERE status = 'PENDING'
-                ORDER BY id
-                """;
+            SELECT id, username, password, roles, status
+            FROM users
+            WHERE status = 'PENDING'
+              AND COALESCE(is_active, 1) = 1
+            ORDER BY id
+            """;
 
-        try (Connection connection =
-                     DatabaseConnection.getConnection();
-             PreparedStatement ps =
-                     connection.prepareStatement(sql);
-             ResultSet rs = ps.executeQuery()) {
+        try (Connection connection = DatabaseConnection.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql);
+             ResultSet result = statement.executeQuery()) {
 
-            while (rs.next()) {
-
-                User user = new User(
-                        rs.getInt("id"),
-                        rs.getString("username"),
-                        rs.getString("password"),
-                        rs.getString("roles"),
-                        rs.getString("status")
-                );
-
-                users.add(user);
+            while (result.next()) {
+                users.add(new User(
+                        result.getInt("id"),
+                        result.getString("username"),
+                        result.getString("password"),
+                        result.getString("roles"),
+                        result.getString("status")
+                ));
             }
 
         } catch (SQLException e) {
-            System.out.println(
-                    "Unable to retrieve pending users: "
-                            + e.getMessage()
-            );
+            System.out.println("Error retrieving pending users: " + e.getMessage());
         }
 
         return users;
     }
 
-    // =========================
+    // ==============================
     // APPROVE USER
-    // =========================
+    // ==============================
 
     public boolean approveUser(int userId) {
 
-        if (userId <= 0) {
-            System.out.println("Invalid user ID.");
-            return false;
-        }
-
         String sql = """
-                UPDATE users
-                SET status = 'APPROVED'
-                WHERE id = ?
-                  AND status = 'PENDING'
-                """;
+            UPDATE users
+            SET status = 'APPROVED'
+            WHERE id = ?
+              AND status = 'PENDING'
+              AND COALESCE(is_active, 1) = 1
+            """;
 
-        try (Connection connection =
-                     DatabaseConnection.getConnection();
-             PreparedStatement ps =
-                     connection.prepareStatement(sql)) {
+        try (Connection connection = DatabaseConnection.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
 
-            ps.setInt(1, userId);
+            statement.setInt(1, userId);
 
-            int rowsUpdated = ps.executeUpdate();
+            int rows = statement.executeUpdate();
 
-            if (rowsUpdated > 0) {
-                System.out.println(
-                        "User approved successfully!"
-                );
+            if (rows > 0) {
+                System.out.println("User approved successfully.");
                 return true;
             }
 
-            System.out.println(
-                    "User not found or account is not pending."
-            );
-            return false;
-
+            System.out.println("User not found or already approved.");
         } catch (SQLException e) {
-            System.out.println(
-                    "Unable to approve user: " + e.getMessage()
-            );
-            return false;
+            System.out.println("Approval failed: " + e.getMessage());
         }
+
+        return false;
     }
 
-    // =========================
+    // ==============================
     // UPDATE USER ROLE AND STATUS
-    // =========================
+    // ==============================
 
     public boolean updateUserRoleAndStatus(
-            int userId,
-            String newRole,
-            String newStatus) {
+            int userId, String role, String status) {
 
-        if (userId <= 0) {
-            System.out.println("Invalid user ID.");
+        if (role == null || status == null) {
+            System.out.println("Role and status are required.");
             return false;
         }
 
-        if (newRole == null || newStatus == null) {
-            System.out.println(
-                    "Role and status are required."
-            );
-            return false;
-        }
+        role = role.trim().toUpperCase();
+        status = status.trim().toUpperCase();
 
-        String normalizedRole =
-                newRole.trim().toUpperCase(Locale.ROOT);
-
-        String normalizedStatus =
-                newStatus.trim().toUpperCase(Locale.ROOT);
-
-        // Validate role
-        if (!normalizedRole.equals("PARTICIPANT")
-                && !normalizedRole.equals("ORGANIZER")
-                && !normalizedRole.equals("ADMIN")) {
-
+        if (!List.of("ADMIN", "ORGANIZER", "PARTICIPANT").contains(role)) {
             System.out.println("Invalid role.");
             return false;
         }
 
-        // Validate status
-        if (!normalizedStatus.equals("APPROVED")
-                && !normalizedStatus.equals("PENDING")) {
-
+        if (!List.of("APPROVED", "PENDING").contains(status)) {
             System.out.println("Invalid status.");
             return false;
         }
 
         String sql = """
-                UPDATE users
-                SET roles = ?, status = ?
-                WHERE id = ?
-                """;
+            UPDATE users
+            SET roles = ?, status = ?
+            WHERE id = ?
+              AND COALESCE(is_active, 1) = 1
+            """;
 
-        try (Connection connection =
-                     DatabaseConnection.getConnection();
-             PreparedStatement ps =
-                     connection.prepareStatement(sql)) {
+        try (Connection connection = DatabaseConnection.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
 
-            ps.setString(1, normalizedRole);
-            ps.setString(2, normalizedStatus);
-            ps.setInt(3, userId);
+            statement.setString(1, role);
+            statement.setString(2, status);
+            statement.setInt(3, userId);
 
-            int rowsUpdated = ps.executeUpdate();
+            return statement.executeUpdate() > 0;
 
-            if (rowsUpdated > 0) {
-                System.out.println(
-                        "User role and status updated successfully!"
-                );
+        } catch (SQLException e) {
+            System.out.println("Update failed: " + e.getMessage());
+        }
+
+        return false;
+    }
+
+    // ==============================
+    // SOFT DELETE / DEACTIVATE USER
+    // ==============================
+
+    public boolean deactivateUser(int userId) {
+
+        String sql = """
+            UPDATE users
+            SET is_active = 0
+            WHERE id = ?
+              AND COALESCE(is_active, 1) = 1
+            """;
+
+        try (Connection connection = DatabaseConnection.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+
+            statement.setInt(1, userId);
+
+            int rows = statement.executeUpdate();
+
+            if (rows > 0) {
+                System.out.println("User account deactivated successfully.");
                 return true;
             }
 
-            System.out.println(
-                    "Update failed. User ID not found."
-            );
-            return false;
+            System.out.println("User not found or already deactivated.");
 
         } catch (SQLException e) {
-            System.out.println(
-                    "Unable to update user: " + e.getMessage()
-            );
-            return false;
+            System.out.println("Deactivation failed: " + e.getMessage());
         }
+
+        return false;
     }
 
-    // =========================
+    // ==============================
     // BACKWARD COMPATIBILITY
-    // =========================
+    // ==============================
 
-    public List<User> user() {
-        return getAllUsers();
+    public User user(int id) {
+
+        String sql = """
+            SELECT id, username, password, roles, status
+            FROM users
+            WHERE id = ?
+              AND COALESCE(is_active, 1) = 1
+            """;
+
+        try (Connection connection = DatabaseConnection.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+
+            statement.setInt(1, id);
+
+            try (ResultSet result = statement.executeQuery()) {
+
+                if (result.next()) {
+                    return new User(
+                            result.getInt("id"),
+                            result.getString("username"),
+                            result.getString("password"),
+                            result.getString("roles"),
+                            result.getString("status")
+                    );
+                }
+            }
+
+        } catch (SQLException e) {
+            System.out.println("Error retrieving user: " + e.getMessage());
+        }
+
+        return null;
     }
 }

@@ -36,16 +36,11 @@ public record User(
     }
 
     public boolean isParticipant() {
-        return "PARTICIPANT".equals(roles);
+        return "PARTICIPANTS".equals(roles);
     }
 
-    public boolean isStudent() {
-        return "STUDENT".equals(roles);
-    }
 
-    public boolean isTeacher() {
-        return "TEACHER".equals(roles);
-    }
+
 
     public boolean isApproved() {
         return "APPROVED".equals(status);

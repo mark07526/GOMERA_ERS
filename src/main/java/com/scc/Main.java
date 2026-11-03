@@ -1,3 +1,4 @@
+
 package com.scc;
 
 import com.scc.dao.initializeDatabase;
@@ -10,7 +11,7 @@ public class Main {
 
     public static void main(String[] args) {
 
-        // 1. Initialize the database first (Tables and constraints setup)
+        // 1. Initialize database before starting the system
         initializeDatabase.initialize();
 
         // 2. Create shared objects
@@ -18,16 +19,28 @@ public class Main {
         UserDao userDao = new UserDao();
 
         try {
-            // 3. Start authentication and role-based routing
+
+            // 3. Start authentication system
             Authentication authentication =
                     new Authentication(userDao, scanner);
 
+            // 4. Start registration, login, and role-based menus
             authentication.start();
 
+        } catch (Exception e) {
+
+            System.out.println("An unexpected error occurred.");
+            System.out.println("Error: " + e.getMessage());
+            e.printStackTrace();
+
         } finally {
-            // 4. Close the shared Scanner when the application ends
+
+            // 5. Close scanner when application exits
             scanner.close();
-            System.out.println("Application closed successfully.");
+
+            System.out.println(
+                    "Application closed successfully."
+            );
         }
     }
 }

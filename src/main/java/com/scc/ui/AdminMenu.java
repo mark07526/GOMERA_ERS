@@ -1,7 +1,11 @@
+
 package com.scc.ui;
 
 import com.scc.dao.UserDao;
+import com.scc.dao.EventDao;
+import com.scc.dao.ActivityLogDao;
 import com.scc.model.User;
+import com.scc.model.Event;
 
 import java.util.List;
 import java.util.Locale;
@@ -10,12 +14,10 @@ import java.util.Scanner;
 public class AdminMenu {
 
     private final UserDao userDao;
+    private final EventDao eventDao;
+    private final ActivityLogDao activityLogDao;
     private final Scanner scanner;
     private final User currentAdmin;
-
-    public AdminMenu(UserDao userDao, Scanner scanner) {
-        this(userDao, scanner, null);
-    }
 
     public AdminMenu(
             UserDao userDao,
@@ -23,6 +25,8 @@ public class AdminMenu {
             User currentAdmin) {
 
         this.userDao = userDao;
+        this.eventDao = new EventDao();
+        this.activityLogDao = new ActivityLogDao();
         this.scanner = scanner;
         this.currentAdmin = currentAdmin;
     }
@@ -36,6 +40,8 @@ public class AdminMenu {
             System.out.println("2. View Pending Registrations");
             System.out.println("3. Approve User Account");
             System.out.println("4. Update User Role and Status");
+            System.out.println("5. View All Events");
+            System.out.println("6. View Activity Logs");
             System.out.println("0. Logout");
             System.out.print("Choose: ");
 
@@ -58,6 +64,14 @@ public class AdminMenu {
                     updateUser();
                     break;
 
+                case "5":
+                    viewAllEvents();
+                    break;
+
+                case "6":
+                    viewActivityLogs();
+                    break;
+
                 case "0":
                     running = false;
                     System.out.println("Admin logged out.");
@@ -75,21 +89,22 @@ public class AdminMenu {
             return;
         }
 
-        // Formatted Console Output with exact borders and column constraints
         String border = "+-------+-----------------+--------------+------------+";
+
         System.out.println("\n================ SYSTEM USERS ================");
         System.out.println(border);
-        System.out.printf("| %-5s | %-15s | %-12s | %-10s |\n", "ID", "Username", "Role", "Status");
+        System.out.printf("| %-5s | %-15s | %-12s | %-10s |%n",
+                "ID", "Username", "Role", "Status");
         System.out.println(border);
 
         for (User user : users) {
-            System.out.printf("| %-5d | %-15s | %-12s | %-10s |\n",
+            System.out.printf("| %-5d | %-15s | %-12s | %-10s |%n",
                     user.id(),
                     user.username(),
                     user.roles(),
-                    user.status()
-            );
+                    user.status());
         }
+
         System.out.println(border);
     }
 
@@ -104,16 +119,10 @@ public class AdminMenu {
         displayUsers(pending);
 
         int userId = readIntInput(
-                "Enter User ID to approve (0 to cancel): "
-        );
+                "Enter User ID to approve (0 to cancel): ");
 
         if (userId == 0) {
             System.out.println("Approval cancelled.");
-            return;
-        }
-
-        if (userId < 0) {
-            System.out.println("User ID must be positive.");
             return;
         }
 
@@ -127,6 +136,12 @@ public class AdminMenu {
 
         if (userDao.approveUser(userId)) {
             System.out.println("Account approved successfully.");
+
+            activityLogDao.logActivity(
+                    currentAdmin.id(),
+                    "APPROVE USER",
+                    "Approved user ID: " + userId
+            );
         } else {
             System.out.println("Approval failed. Please try again.");
         }
@@ -140,52 +155,38 @@ public class AdminMenu {
             return;
         }
 
-        displayUsers(users);
-
-        User target = null;
-        int targetUserId = 0;
-
-        // Loop para paulit-ulit mag-prompt hanggang sa maglagay ng valid ID o mag-cancel (0)
-        while (true) {
-            targetUserId = readIntInput(
-                    "Enter User ID to update (0 to cancel): "
-            );
-
-            if (targetUserId == 0) {
-                System.out.println("Update cancelled.");
-                return;
-            }
-
-            if (targetUserId < 0) {
-                System.out.println("User ID must be positive.");
-                continue;
-            }
-
-            int finalTargetUserId = targetUserId;
-            target = users.stream()
-                    .filter(user -> user.id() == finalTargetUserId)
-                    .findFirst()
-                    .orElse(null);
-
-            if (target == null) {
-                System.out.println("User ID not found. Please try again.");
-                continue; // Babalik sa pagtatanong ng ID kung wala sa listahan
-            }
-
-            break; // Nahanap na, tutuloy na sa susunod na hakbang
+        if (currentAdmin == null) {
+            System.out.println("Update blocked: admin identity unavailable.");
+            return;
         }
 
-        if (currentAdmin == null) {
-            System.out.println(
-                    "Update blocked: logged-in admin identity is unavailable."
-            );
+        displayUsers(users);
+
+        int targetUserId = readIntInput(
+                "Enter User ID to update (0 to cancel): ");
+
+        if (targetUserId == 0) {
+            System.out.println("Update cancelled.");
+            return;
+        }
+
+        if (targetUserId < 0) {
+            System.out.println("User ID must be positive.");
+            return;
+        }
+
+        User target = users.stream()
+                .filter(user -> user.id() == targetUserId)
+                .findFirst()
+                .orElse(null);
+
+        if (target == null) {
+            System.out.println("User ID not found.");
             return;
         }
 
         if (targetUserId == currentAdmin.id()) {
-            System.out.println(
-                    "You cannot change your own role or status."
-            );
+            System.out.println("You cannot change your own role or status.");
             return;
         }
 
@@ -209,6 +210,7 @@ public class AdminMenu {
         System.out.println("New Status: " + newStatus);
 
         System.out.print("Confirm update? (Y/N): ");
+
         String confirmation = scanner.nextLine()
                 .trim()
                 .toUpperCase(Locale.ROOT);
@@ -226,9 +228,44 @@ public class AdminMenu {
 
         if (success) {
             System.out.println("User updated successfully.");
+
+            activityLogDao.logActivity(
+                    currentAdmin.id(),
+                    "UPDATE USER",
+                    "Updated user ID " + targetUserId
+                            + " to role " + newRole
+                            + " and status " + newStatus
+            );
         } else {
             System.out.println("Update failed. Please check the user ID.");
         }
+    }
+
+    private void viewAllEvents() {
+        List<Event> events = eventDao.getAllEvents();
+
+        if (events == null || events.isEmpty()) {
+            System.out.println("No active events found.");
+            return;
+        }
+
+        System.out.println("\n========== ALL ACTIVE EVENTS ==========");
+
+        for (Event event : events) {
+            System.out.println("-----------------------------------");
+            System.out.println("Event ID: " + event.getId());
+            System.out.println("Name: " + event.getEventName());
+            System.out.println("Category: " + event.getCategory());
+            System.out.println("Date: " + event.getEventDate());
+            System.out.println("Location: " + event.getLocation());
+            System.out.println("Capacity: " + event.getCapacity());
+        }
+
+        System.out.println("-----------------------------------");
+    }
+
+    private void viewActivityLogs() {
+        activityLogDao.displayAllActivityLogs();
     }
 
     private int readIntInput(String prompt) {
@@ -249,9 +286,7 @@ public class AdminMenu {
             System.out.println("\nAvailable Roles:");
             System.out.println("1. PARTICIPANT");
             System.out.println("2. ORGANIZER");
-            System.out.println("3. STUDENT");
-            System.out.println("4. TEACHER");
-            System.out.println("5. ADMIN");
+            System.out.println("3. ADMIN");
             System.out.print("Choose role (0 to cancel): ");
 
             String choice = scanner.nextLine().trim();
@@ -259,16 +294,16 @@ public class AdminMenu {
             switch (choice) {
                 case "1":
                     return "PARTICIPANT";
+
                 case "2":
                     return "ORGANIZER";
+
                 case "3":
-                    return "STUDENT";
-                case "4":
-                    return "TEACHER";
-                case "5":
                     return "ADMIN";
+
                 case "0":
                     return null;
+
                 default:
                     System.out.println("Invalid choice.");
             }
@@ -287,10 +322,13 @@ public class AdminMenu {
             switch (choice) {
                 case "1":
                     return "APPROVED";
+
                 case "2":
                     return "PENDING";
+
                 case "0":
                     return null;
+
                 default:
                     System.out.println("Invalid choice.");
             }
